@@ -1,0 +1,626 @@
+// Old version of fluid compute shader
+// Designed to report to CPU after every kernel
+
+#pragma enable_d3d11_debug_symbols
+
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel addSources
+#pragma kernel diffuseStep
+#pragma kernel calculateDivergence
+#pragma kernel poissonStep
+#pragma kernel applyPoissonMatrixHorizontal
+#pragma kernel applyPoissonMatrixVertical
+#pragma kernel advect
+#pragma kernel visualizeGrayscale
+#pragma kernel visualizeRGB
+#pragma kernel boundsContinuity
+#pragma kernel boundsReflectionV
+#pragma kernel boundsReflectionH
+
+int resolution;
+float dt;
+float diffusionRate;
+float iter;
+float visualizationMax;
+int groupCount;
+groupshared float local1[100];
+groupshared float local2[100];
+RWTexture2D<float4> tex;
+
+float colorValue;
+
+// readArr1 is set as read-write to save memory. It should NOT be
+// written to under normal circumstances.
+RWStructuredBuffer<float> workingArr;
+RWStructuredBuffer<float> readArr1;
+StructuredBuffer<float> readArr2;
+StructuredBuffer<float> readArr3;
+
+
+// Transforms group-local coords into buffer coords, given group #
+int localToBuffer(int local, int2 group)
+{
+	int groupOffset = 8 * ((resolution + 2) * group.y + group.x);
+	int coord = (resolution+2) * floor(local / uint(10)) + local.x % uint(10);
+	return groupOffset + coord;
+}
+
+// Transforms 2D group-local coords into 1D group-local coords
+int local2DToLocal(int2 local2D)
+{
+	return 10*(local2D.y + 1) + local2D.x + 1;
+}
+
+// Transforms 2D group-local coords into buffer coords, given group #
+int local2DToBuffer(int2 local2D, int2 group)
+{
+	int groupOffset = 8 * ((resolution + 2) * group.y + group.x);
+	int coord = (resolution+2)*local2D.y + local2D.x;
+	return groupOffset + coord;
+}
+
+// Returns 0 if thread is not an edge
+// Returns 1/2/3/4 if on left/right/top/bottom respectively
+// Returns 5/6/7/8 if UL/BL/UR/BR corner respectively
+int checkEdge(int2 local2D, int2 group)
+{
+	if(group.x == 0 && local2D.x == 0)
+	{
+		if(group.y == 0 && local2D.y == 0)
+		{ return 5; }
+
+		else if(group.y == (groupCount - 1) && local2D.y == 7)
+		{ return 6; }
+
+		else
+		{ return 1; }
+	}
+
+	else if(group.x == (groupCount - 1) && local2D.x == 7)
+	{
+		if(group.y == 0 && local2D.y == 0)
+		{ return 7; }
+
+		else if(group.y == (groupCount - 1) && local2D.y == 7)
+		{ return 8; }
+
+		else
+		{ return 2; }
+	}
+
+	else if (group.y == 0 && local2D.y == 0)
+	{ return 3; }
+
+	else if(group.y == (groupCount - 1) && local2D.y == 7)
+	{ return 4; }
+
+	else
+	{ return 0; }
+}
+
+
+
+// Adds the read array to the working array, scaled by timestep.
+// Does not add at borders--this is left to the CPU for simplicity.
+[numthreads(8,8,1)]
+void addSources(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
+{
+	local1[local2DToLocal((int2) id)] = readArr1[local2DToBuffer((int2) id + int2(1,1), (int2) group)];
+
+	GroupMemoryBarrierWithGroupSync();
+
+	workingArr[local2DToBuffer((int2) id + int2(1,1), (int2) group)] += 
+		local1[local2DToLocal((int2) id)] * dt;
+}
+
+// One step in a Gauss-Seidel linear solver for diffusion.
+// CPU will flip and enforce bounds after each step, then repeat.
+// This will be done an arbitrary number of times.
+// Approximations become more accurate with each step.
+// The previous step is stored in the read array, while current
+// calculations are written to working array.
+// They should be flipped between each approx step.
+// readArr2 contains data from last frame.
+[numthreads(8,8,1)]
+void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
+{
+	// for(int i = 0; i < 100; i += 64)
+	// {
+	// 	int localIndex = (8+2) * id.y + id.x + i;
+	// 	int bufferIndex = 7*group.y*resolution + group.x*7 + localIndex%10 + (resolution+2)*floor(localIndex/10);
+	//  	if(localIndex < 100)
+	//  	{
+	//  		local1[localIndex] = readArr1[bufferIndex];
+	//  	}
+	// }
+
+	int localBaseIndex = 8 * id.y + id.x;
+	
+	for(int i = 0; i < 100; i += 64)
+	{
+		int localIndex = localBaseIndex + i;
+		int bufferIndex = localToBuffer(localIndex, (int2) group);
+	 	
+	 	if(localIndex < 100)
+	 	{
+	 		local1[localIndex] = workingArr[bufferIndex];
+	 		local2[localIndex] = readArr2[bufferIndex];
+	 	}
+	}
+
+	//local2[local2DToLocal((int2) id)] = readArr2[local2DToBuffer((int2) id, (int2) group)];
+	
+	GroupMemoryBarrierWithGroupSync();
+
+	float center = local2[local2DToLocal((int2) id)];
+	float left = local1[local2DToLocal((int2) id - int2(1, 0))];
+	float right = local1[local2DToLocal((int2) id + int2(1, 0))];
+	float up = local1[local2DToLocal((int2) id - int2(0, 1))];
+	float down = local1[local2DToLocal((int2) id + int2(0, 1))];
+
+	float value = (center + diffusionRate * (left + right + up + down)) / iter;
+
+	GroupMemoryBarrierWithGroupSync();
+
+	workingArr[local2DToBuffer((int2) id + int2(1,1), (int2) group)] = value;
+
+	GroupMemoryBarrierWithGroupSync();
+
+}
+
+// Calculates divergence using readArr1 as the x velocity, 
+// and readArr 2 as the y velocity.
+[numthreads(8,8,1)]
+void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
+{
+	// local1 for x, local2 for y
+	int localBaseIndex = 8 * id.y + id.x;
+	
+	for(int i = 0; i < 100; i += 64)
+	{
+		int localIndex = localBaseIndex + i;
+		int bufferIndex = localToBuffer(localIndex, (int2) group);
+	 	
+	 	if(localIndex < 100)
+	 	{
+	 		local1[localIndex] = readArr1[bufferIndex];
+	 		local2[localIndex] = readArr2[bufferIndex];
+	 	}
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+
+	float gridStep = 1.0/(float) resolution;
+	int2 offsetID = (int2) id + int2(1, 1);
+
+	int2 rightIndex = (int2) id + int2(1, 0);
+	int2 leftIndex = (int2) id - int2(1, 0);
+	int2 downIndex = (int2) id + int2(0, 1);
+	int2 upIndex = (int2) id - int2(0, 1);
+
+	float right = local1[local2DToLocal(rightIndex)];
+	float left = local1[local2DToLocal(leftIndex)];
+	float down = local2[local2DToLocal(downIndex)];
+	float up = local2[local2DToLocal(upIndex)];
+
+	int index = local2DToBuffer(offsetID, (int2) group);
+	float value = -0.5 * gridStep * (right - left + down - up);
+	workingArr[index] = value;
+}
+
+// One step in a linear solve for the poisson matrix
+// Uses readArr1 as poisson matrix, and readArr2 as divergence
+[numthreads(8,8,1)]
+void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
+{
+	//local1 for divergence, local2 for poisson matrix
+
+	int localIndex = (8+2) * id.y + id.x;
+	int bufferIndex = localToBuffer(localIndex, (int2) group);
+
+	for(int i = 0; i < 100; i += 64)
+	{		
+	 	if(localIndex + i < 100)
+	 	{
+	 		local2[localIndex + i] = readArr1[bufferIndex + 1];
+	 	}
+	}
+
+	local1[local2DToLocal((int2) id)] = readArr2[local2DToBuffer((int2) id, (int2) group)];
+
+	GroupMemoryBarrierWithGroupSync();
+
+	float div = local1[local2DToLocal((int2) id)];
+	float left = local2[local2DToLocal((int2) id - int2(1, 0))];
+	float right = local2[local2DToLocal((int2) id + int2(1, 0))];
+	float up = local2[local2DToLocal((int2) id - int2(0, 1))];
+	float down = local2[local2DToLocal((int2) id + int2(0, 1))];
+
+	float p = (div + left + right + up + down) / 4;
+	workingArr[local2DToBuffer((int2) id, (int2) group)] = p;
+}
+
+// Applies the Poisson matrix to the x velocity at this point.
+// Uses x velocity as the workingArr, and poisson as readArr1
+[numthreads(8,8,1)]
+void applyPoissonMatrixHorizontal(uint3 id:  SV_GroupThreadID, uint3 group : SV_GroupID)
+{
+	// int localIndex = (8+2) * id.y + id.x;
+	// int bufferIndex = localToBuffer(localIndex, (int2) group);
+
+	// for(int i = 0; i < 100; i += 64)
+	// {
+	 	
+	//  	if(localIndex + i < 100)
+	//  	{
+	//  		local1[localIndex + i] = readArr1[bufferIndex + i];
+	//  	}
+	// }
+
+	int localBaseIndex = 8 * id.y + id.x;
+	
+	for(int i = 0; i < 100; i += 64)
+	{
+		int localIndex = localBaseIndex + i;
+		int bufferIndex = localToBuffer(localIndex, (int2) group);
+	 	
+	 	if(localIndex < 100)
+	 	{
+	 		local1[localIndex] = readArr1[bufferIndex];
+	 	}
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+
+	float h = 1.0 / resolution;
+	float left = local1[local2DToLocal((int2) id - int2(1, 0))];
+	float right = local1[local2DToLocal((int2) id + int2(1, 0))];
+	int index = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	workingArr[index] -= 0.5 * (right - left) / h;	
+}
+
+// Applies the Poisson matrix to the y velocity at this point.
+// Uses y velocity as the workingArr, and poisson as readArr1
+[numthreads(8,8,1)]
+void applyPoissonMatrixVertical(uint3 id: SV_GroupThreadID, uint3 group : SV_GroupID)
+{
+	// int localIndex = 8 * id.y + id.x;
+	// int bufferIndex = localToBuffer(localIndex, (int2) group);
+
+	// for(int i = 0; i < 100; i += 64)
+	// {
+	 	
+	//  	if(localIndex + i < 100)
+	//  	{
+	//  		local1[localIndex + i] = readArr1[bufferIndex + i];
+	//  	}
+	// }
+	
+	int localBaseIndex = 8 * id.y + id.x;
+
+
+	for(int i = 0; i < 100; i += 64)
+	{
+		int localIndex = localBaseIndex + i;
+		int bufferIndex = localToBuffer(localIndex, (int2) group);
+	 	
+	 	if(localIndex < 100)
+	 	{
+	 		local1[localIndex] = readArr1[bufferIndex];
+	 	}
+	}
+
+	GroupMemoryBarrierWithGroupSync();
+	
+	float h = 1.0 / resolution;
+	float up = local1[local2DToLocal((int2) id - int2(0, 1))];
+	float down = local1[local2DToLocal((int2) id + int2(0, 1))];
+	int index = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	workingArr[index] -= 0.5 * (down - up) / h;	
+}
+
+// Calculates advection on a given field.
+// readArr1 is x velocity, readArr2 is y velocity
+// The local readArr3 is the field to advect
+[numthreads(8,8,1)]
+void advect(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
+{	
+    // Calculates advected field at this point by backtracking velocity.
+    // Finds origin of particle (x, y), in continuous space, then finds its density
+    // value by taking a sum of adjacent lattice-point densities,
+    // weighted by (x, y)'s distance to each lattice.
+	local1[local2DToLocal((int2) id)] = readArr1[local2DToBuffer((int2) id + int2(1, 1), (int2) group)];
+	local2[local2DToLocal((int2) id)] = readArr2[local2DToBuffer((int2) id + int2(1, 1), (int2) group)];
+
+	int i0, j0; // Closest gridpoint to x,y
+	int i1, j1; // i,j + 1
+	float x, y; // Original position of particle that lands at this point
+	float s0, t0; // How far x,y is from i0, j0
+	float s1, t1; // s0, t0 + 1
+	float dt0; // dt*N
+
+	float s0t0Weight;
+	float s0t1Weight;
+	float s1t0Weight;
+	float s1t1Weight;
+
+	dt0 = dt * resolution;
+	
+    // Find origin of particle
+	x = (id.x + 1) - dt0 * local1[local2DToLocal((int2) id)];
+	y = (id.y + 1) - dt0 * local2[local2DToLocal((int2) id)];
+
+	// Apply bounds
+	if(x < 0.5) { x = 0.5; }
+	if(x > resolution + 0.5) { x = resolution + 0.5; }
+	if(y < 0.5) { y = 0.5; }
+	if(y > resolution + 0.5) { y = resolution + 0.5; }
+
+	// Find lattice points
+	i0 = floor(x);
+	j0 = floor(y);
+	i1 = i0 + 1;
+	j1 = j0 + 1;
+
+	// Find distances of particle origin from lattice points.
+	s1 = x - i0;
+	s0 = 1 - s1;
+	t1 = y - j0;
+	t0 = 1 - t1;
+
+	s0t0Weight = s0 * t0 * readArr3[local2DToBuffer(int2(i0, j0), (int2) group)];
+	s0t1Weight = s0 * t1 * readArr3[local2DToBuffer(int2(i0, j1), (int2) group)];
+	s1t0Weight = s1 * t0 * readArr3[local2DToBuffer(int2(i1, j0), (int2) group)];
+	s1t1Weight = s1 * t1 * readArr3[local2DToBuffer(int2(i1, j1), (int2) group)];
+
+	workingArr[local2DToBuffer((int2) id  + int2(1, 1), (int2) group)] = s0t0Weight + s0t1Weight + s1t0Weight + s1t1Weight;
+}
+
+// Grayscale visualization of readArr1
+[numthreads(8,8,1)]
+void visualizeGrayscale(uint3 id: SV_GroupThreadID, uint3 group : SV_GroupID)
+{
+	local1[local2DToLocal((int2) id)] = readArr1[local2DToBuffer((int2) id + int2(1, 1), (int2) group)];
+
+	GroupMemoryBarrierWithGroupSync();
+
+	float value = local1[local2DToLocal((int2) id)];
+	value = 1 - min(value / visualizationMax, 1);
+	tex[int2(id.x + 8* group.x, id.y + 8*group.y)] = float4(value, value, value, 1.0);
+}
+
+// RGB visualization of readArr1
+[numthreads(8,8,1)]
+void visualizeRGB(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
+{
+	local1[local2DToLocal((int2) id)] = readArr1[local2DToBuffer((int2) id + int2(1, 1), (int2) group)];
+
+	GroupMemoryBarrierWithGroupSync();
+
+	float value = local1[local2DToLocal((int2) id)];
+	float tens = (value / uint(10)) % uint(10);
+	float ones = value % uint(10);
+	float tenths = (value * uint(10) % uint(10)) / uint(10);
+
+	float4 color = float4(1.0 - 0.1*tens, 1.0 - 0.1*ones, 1.0 - 0.1*tenths, 1.0);
+	tex[int2(id.x + 8* group.x, id.y + 8*group.y)] = color;	
+}
+
+// Enforces boundary continuity on workingArr
+[numthreads(8,8,1)]
+void boundsContinuity(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
+{
+	// int writeIndex = local2DToBuffer((int2) id, (int2) group);
+	// int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+
+	int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	int writeIndex;
+	int writeIndex1;
+	int writeIndex2;
+	int writeIndex3;
+
+	switch(checkEdge((uint2) id, (uint2) group))
+	{
+		case 1:
+			writeIndex = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			workingArr[writeIndex] = workingArr[readIndex];
+			break;
+
+		case 2:
+			writeIndex = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			workingArr[writeIndex] = workingArr[readIndex];
+			break;
+
+		case 3:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			workingArr[writeIndex] = workingArr[readIndex];
+			break;
+
+		case 4:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			workingArr[writeIndex] = workingArr[readIndex];
+			break;
+
+		case 5:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			workingArr[writeIndex1] = workingArr[readIndex];
+			workingArr[writeIndex2] = workingArr[readIndex];
+			workingArr[writeIndex3] = workingArr[readIndex];
+			break;
+
+		case 6:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			workingArr[writeIndex1] = workingArr[readIndex];
+			workingArr[writeIndex2] = workingArr[readIndex];
+			workingArr[writeIndex3] = workingArr[readIndex];
+			break;
+
+		case 7:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			workingArr[writeIndex1] = workingArr[readIndex];
+			workingArr[writeIndex2] = workingArr[readIndex];
+			workingArr[writeIndex3] = workingArr[readIndex];
+			break;
+
+		case 8:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			workingArr[writeIndex1] = workingArr[readIndex];
+			workingArr[writeIndex2] = workingArr[readIndex];
+			workingArr[writeIndex3] = workingArr[readIndex];
+			break;
+	}
+}
+
+// Enforces boundary reflection in horizontal direction on workingArr
+[numthreads(8,8,1)]
+void boundsReflectionH(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
+{
+	// int writeIndex = local2DToBuffer((int2) id, (int2) group);
+	// int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+
+	int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	int writeIndex;
+	int writeIndex1;
+	int writeIndex2;
+	int writeIndex3;
+
+	switch(checkEdge((uint2) id, (uint2) group))
+	{
+		case 1:
+			writeIndex = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			workingArr[writeIndex] = -workingArr[readIndex];
+			break;
+
+		case 2:
+			writeIndex = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			workingArr[writeIndex] = -workingArr[readIndex];
+			break;
+
+		case 3:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			workingArr[writeIndex] = workingArr[readIndex];
+			break;
+
+		case 4:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			workingArr[writeIndex] = workingArr[readIndex];
+			break;
+
+		case 5:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			workingArr[writeIndex1] = 0;
+			workingArr[writeIndex2] = -workingArr[readIndex];
+			workingArr[writeIndex3] = workingArr[readIndex];
+			break;
+
+		case 6:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			workingArr[writeIndex1] = 0;
+			workingArr[writeIndex2] = -workingArr[readIndex];
+			workingArr[writeIndex3] = workingArr[readIndex];
+			break;
+
+		case 7:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			workingArr[writeIndex1] = 0;
+			workingArr[writeIndex2] = -workingArr[readIndex];
+			workingArr[writeIndex3] = workingArr[readIndex];
+			break;
+
+		case 8:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			workingArr[writeIndex1] = 0;
+			workingArr[writeIndex2] = -workingArr[readIndex];
+			workingArr[writeIndex3] = workingArr[readIndex];
+			break;
+		}
+}
+
+// Enforces bounda ry reflection in vertical direction on workingArr
+[numthreads(8,8,1)]
+void boundsReflectionV(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
+{
+		// int writeIndex = local2DToBuffer((int2) id, (int2) group);
+	// int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+
+	int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	int writeIndex;
+	int writeIndex1;
+	int writeIndex2;
+	int writeIndex3;
+
+	switch(checkEdge((uint2) id, (uint2) group))
+	{
+		case 1:
+			writeIndex = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			workingArr[writeIndex] = workingArr[readIndex];
+			break;
+
+		case 2:
+			writeIndex = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			workingArr[writeIndex] = workingArr[readIndex];
+			break;
+
+		case 3:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			workingArr[writeIndex] = -workingArr[readIndex];
+			break;
+
+		case 4:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			workingArr[writeIndex] = -workingArr[readIndex];
+			break;
+
+		case 5:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			workingArr[writeIndex1] = 0;
+			workingArr[writeIndex2] = workingArr[readIndex];
+			workingArr[writeIndex3] = -workingArr[readIndex];
+			break;
+
+		case 6:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			workingArr[writeIndex1] = 0;
+			workingArr[writeIndex2] = workingArr[readIndex];
+			workingArr[writeIndex3] = -workingArr[readIndex];
+			break;
+
+		case 7:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			workingArr[writeIndex1] = 0;
+			workingArr[writeIndex2] = workingArr[readIndex];
+			workingArr[writeIndex3] = -workingArr[readIndex];
+			break;
+
+		case 8:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			workingArr[writeIndex1] = 0;
+			workingArr[writeIndex2] = -workingArr[readIndex];
+			workingArr[writeIndex3] = workingArr[readIndex];
+			break;
+		}
+}

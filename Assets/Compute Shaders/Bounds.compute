@@ -1,0 +1,260 @@
+// Returns 0 if thread is not an edge
+// Returns 1/2/3/4 if on left/right/top/bottom respectively
+// Returns 5/6/7/8 if UL/BL/UR/BR corner respectively
+int checkEdge(int2 local2D, int2 group)
+{
+	if(group.x == 0 && local2D.x == 0)
+	{
+		if(group.y == 0 && local2D.y == 0)
+		{ return 5; }
+
+		else if(group.y == (groupCount - 1) && local2D.y == 7)
+		{ return 6; }
+
+		else
+		{ return 1; }
+	}
+
+	else if(group.x == (groupCount - 1) && local2D.x == 7)
+	{
+		if(group.y == 0 && local2D.y == 0)
+		{ return 7; }
+
+		else if(group.y == (groupCount - 1) && local2D.y == 7)
+		{ return 8; }
+
+		else
+		{ return 2; }
+	}
+
+	else if (group.y == 0 && local2D.y == 0)
+	{ return 3; }
+
+	else if(group.y == (groupCount - 1) && local2D.y == 7)
+	{ return 4; }
+
+	else
+	{ return 0; }
+}
+
+// Enforces boundary continuity on field
+// TODO: Adapt for fully parallel shader
+[numthreads(8,8,1)]
+void boundsContinuity(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID, RWStructuredBuffer<float> field)
+{
+	// int writeIndex = local2DToBuffer((int2) id, (int2) group);
+	// int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+
+	int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	int writeIndex;
+	int writeIndex1;
+	int writeIndex2;
+	int writeIndex3;
+
+	switch(checkEdge((uint2) id, (uint2) group))
+	{
+		case 1:
+			writeIndex = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			field[writeIndex] = field[readIndex];
+			break;
+
+		case 2:
+			writeIndex = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			field[writeIndex] = field[readIndex];
+			break;
+
+		case 3:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			field[writeIndex] = field[readIndex];
+			break;
+
+		case 4:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			field[writeIndex] = field[readIndex];
+			break;
+
+		case 5:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			field[writeIndex1] = field[readIndex];
+			field[writeIndex2] = field[readIndex];
+			field[writeIndex3] = field[readIndex];
+			break;
+
+		case 6:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			field[writeIndex1] = field[readIndex];
+			field[writeIndex2] = field[readIndex];
+			field[writeIndex3] = field[readIndex];
+			break;
+
+		case 7:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			field[writeIndex1] = field[readIndex];
+			field[writeIndex2] = field[readIndex];
+			field[writeIndex3] = field[readIndex];
+			break;
+
+		case 8:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			field[writeIndex1] = field[readIndex];
+			field[writeIndex2] = field[readIndex];
+			field[writeIndex3] = field[readIndex];
+			break;
+	}
+}
+
+// Enforces boundary reflection in horizontal direction on field
+// TODO: Adapt for fully parallel shader
+[numthreads(8,8,1)]
+void boundsReflectionH(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID, RWStructuredBuffer<float> field)
+{
+	// int writeIndex = local2DToBuffer((int2) id, (int2) group);
+	// int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+
+	int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	int writeIndex;
+	int writeIndex1;
+	int writeIndex2;
+	int writeIndex3;
+
+	switch(checkEdge((uint2) id, (uint2) group))
+	{
+		case 1:
+			writeIndex = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			field[writeIndex] = -field[readIndex];
+			break;
+
+		case 2:
+			writeIndex = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			field[writeIndex] = -field[readIndex];
+			break;
+
+		case 3:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			field[writeIndex] = field[readIndex];
+			break;
+
+		case 4:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			field[writeIndex] = field[readIndex];
+			break;
+
+		case 5:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			field[writeIndex1] = 0;
+			field[writeIndex2] = -field[readIndex];
+			field[writeIndex3] = field[readIndex];
+			break;
+
+		case 6:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			field[writeIndex1] = 0;
+			field[writeIndex2] = -field[readIndex];
+			field[writeIndex3] = field[readIndex];
+			break;
+
+		case 7:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			field[writeIndex1] = 0;
+			field[writeIndex2] = -field[readIndex];
+			field[writeIndex3] = field[readIndex];
+			break;
+
+		case 8:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			field[writeIndex1] = 0;
+			field[writeIndex2] = -field[readIndex];
+			field[writeIndex3] = field[readIndex];
+			break;
+		}
+}
+
+// Enforces bounda ry reflection in vertical direction on field
+// TODO: Adapt for fully parallel shader
+[numthreads(8,8,1)]
+void boundsReflectionV(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID, RWStructuredBuffer<float> field)
+{
+		// int writeIndex = local2DToBuffer((int2) id, (int2) group);
+	// int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+
+	int readIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	int writeIndex;
+	int writeIndex1;
+	int writeIndex2;
+	int writeIndex3;
+
+	switch(checkEdge((uint2) id, (uint2) group))
+	{
+		case 1:
+			writeIndex = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			field[writeIndex] = field[readIndex];
+			break;
+
+		case 2:
+			writeIndex = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			field[writeIndex] = field[readIndex];
+			break;
+
+		case 3:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			field[writeIndex] = -field[readIndex];
+			break;
+
+		case 4:
+			writeIndex = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			field[writeIndex] = -field[readIndex];
+			break;
+
+		case 5:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			field[writeIndex1] = 0;
+			field[writeIndex2] = field[readIndex];
+			field[writeIndex3] = -field[readIndex];
+			break;
+
+		case 6:
+			writeIndex1 = local2DToBuffer((int2) id + int2(0, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(0, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			field[writeIndex1] = 0;
+			field[writeIndex2] = field[readIndex];
+			field[writeIndex3] = -field[readIndex];
+			break;
+
+		case 7:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 0), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 0), (int2) group);
+			field[writeIndex1] = 0;
+			field[writeIndex2] = field[readIndex];
+			field[writeIndex3] = -field[readIndex];
+			break;
+
+		case 8:
+			writeIndex1 = local2DToBuffer((int2) id + int2(2, 2), (int2) group);
+			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
+			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
+			field[writeIndex1] = 0;
+			field[writeIndex2] = -field[readIndex];
+			field[writeIndex3] = field[readIndex];
+			break;
+		}
+}
