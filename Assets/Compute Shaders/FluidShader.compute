@@ -17,6 +17,22 @@
 #pragma kernel boundsReflectionV
 #pragma kernel boundsReflectionH
 
+#define LOAD(id, group, loadFrom, loadTo) {\
+	int localIndex = local2DToLocal((int2) id);\
+	int bufferIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);\
+	loadTo[localIndex] = loadFrom[bufferIndex];\
+	}
+
+#define LOAD_WITH_EDGES(id, group, loadFrom, loadTo) {\
+	int localBaseIndex = 8 * id.y + id.x;\
+	for(int i = 0; i < 100; i += 64)\
+	{\
+		int localIndex = localBaseIndex + i;\
+		int bufferIndex = localToBuffer(localIndex, (int2) group);\
+		if(localIndex < 100) {loadTo[localIndex] = loadFrom[bufferIndex]; }\
+	}\
+	}
+
 int resolution;
 float dt;
 float diffusionRate;
@@ -33,8 +49,8 @@ float colorValue;
 // written to under normal circumstances.
 RWStructuredBuffer<float> workingArr;
 RWStructuredBuffer<float> readArr1;
-StructuredBuffer<float> readArr2;
-StructuredBuffer<float> readArr3;
+RWStructuredBuffer<float> readArr2;
+RWStructuredBuffer<float> readArr3;
 
 
 // Transforms group-local coords into buffer coords, given group #
@@ -57,6 +73,29 @@ int local2DToBuffer(int2 local2D, int2 group)
 	int groupOffset = 8 * ((resolution + 2) * group.y + group.x);
 	int coord = (resolution+2)*local2D.y + local2D.x;
 	return groupOffset + coord;
+}
+
+void load(int2 id, int2 group, RWStructuredBuffer<float> loadFrom, out float loadTo[100])
+{
+	int localIndex = local2DToLocal((int2) id);
+	int bufferIndex = local2DToBuffer((int2) id, (int2) group);
+	loadTo[localIndex] = loadFrom[bufferIndex];
+}
+
+void loadWithEdges(int2 id, int2 group, RWStructuredBuffer<float> loadFrom, out float loadTo[100])
+{
+	int localBaseIndex = 8 * id.y + id.x;
+	
+	for(int i = 0; i < 100; i += 64)
+	{
+		int localIndex = localBaseIndex + i;
+		int bufferIndex = localToBuffer(localIndex, group);
+	 	
+	 	if(localIndex < 100)
+	 	{
+	 		loadTo[localIndex] = loadFrom[bufferIndex];
+	 	}
+	}
 }
 
 // Returns 0 if thread is not an edge
@@ -105,7 +144,7 @@ int checkEdge(int2 local2D, int2 group)
 [numthreads(8,8,1)]
 void addSources(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
-	local1[local2DToLocal((int2) id)] = readArr1[local2DToBuffer((int2) id + int2(1,1), (int2) group)];
+	LOAD(id, group, readArr1, local1);
 
 	GroupMemoryBarrierWithGroupSync();
 
@@ -124,32 +163,9 @@ void addSources(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 [numthreads(8,8,1)]
 void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
-	// for(int i = 0; i < 100; i += 64)
-	// {
-	// 	int localIndex = (8+2) * id.y + id.x + i;
-	// 	int bufferIndex = 7*group.y*resolution + group.x*7 + localIndex%10 + (resolution+2)*floor(localIndex/10);
-	//  	if(localIndex < 100)
-	//  	{
-	//  		local1[localIndex] = readArr1[bufferIndex];
-	//  	}
-	// }
+	LOAD_WITH_EDGES(id, group, workingArr, local1);
+	LOAD_WITH_EDGES(id, group, readArr2, local2);
 
-	int localBaseIndex = 8 * id.y + id.x;
-	
-	for(int i = 0; i < 100; i += 64)
-	{
-		int localIndex = localBaseIndex + i;
-		int bufferIndex = localToBuffer(localIndex, (int2) group);
-	 	
-	 	if(localIndex < 100)
-	 	{
-	 		local1[localIndex] = workingArr[bufferIndex];
-	 		local2[localIndex] = readArr2[bufferIndex];
-	 	}
-	}
-
-	//local2[local2DToLocal((int2) id)] = readArr2[local2DToBuffer((int2) id, (int2) group)];
-	
 	GroupMemoryBarrierWithGroupSync();
 
 	float center = local2[local2DToLocal((int2) id)];
@@ -173,20 +189,8 @@ void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 [numthreads(8,8,1)]
 void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
-	// local1 for x, local2 for y
-	int localBaseIndex = 8 * id.y + id.x;
-	
-	for(int i = 0; i < 100; i += 64)
-	{
-		int localIndex = localBaseIndex + i;
-		int bufferIndex = localToBuffer(localIndex, (int2) group);
-	 	
-	 	if(localIndex < 100)
-	 	{
-	 		local1[localIndex] = readArr1[bufferIndex];
-	 		local2[localIndex] = readArr2[bufferIndex];
-	 	}
-	}
+	LOAD_WITH_EDGES(id, group, readArr1, local1)
+	LOAD_WITH_EDGES(id, group, readArr2, local2)
 
 	GroupMemoryBarrierWithGroupSync();
 
@@ -214,19 +218,8 @@ void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
 	//local1 for divergence, local2 for poisson matrix
-
-	int localIndex = (8+2) * id.y + id.x;
-	int bufferIndex = localToBuffer(localIndex, (int2) group);
-
-	for(int i = 0; i < 100; i += 64)
-	{		
-	 	if(localIndex + i < 100)
-	 	{
-	 		local2[localIndex + i] = readArr1[bufferIndex + 1];
-	 	}
-	}
-
-	local1[local2DToLocal((int2) id)] = readArr2[local2DToBuffer((int2) id, (int2) group)];
+	LOAD_WITH_EDGES(id, group, readArr1, local2);
+	LOAD(id, group, readArr2, local1);
 
 	GroupMemoryBarrierWithGroupSync();
 
@@ -245,30 +238,7 @@ void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 [numthreads(8,8,1)]
 void applyPoissonMatrixHorizontal(uint3 id:  SV_GroupThreadID, uint3 group : SV_GroupID)
 {
-	// int localIndex = (8+2) * id.y + id.x;
-	// int bufferIndex = localToBuffer(localIndex, (int2) group);
-
-	// for(int i = 0; i < 100; i += 64)
-	// {
-	 	
-	//  	if(localIndex + i < 100)
-	//  	{
-	//  		local1[localIndex + i] = readArr1[bufferIndex + i];
-	//  	}
-	// }
-
-	int localBaseIndex = 8 * id.y + id.x;
-	
-	for(int i = 0; i < 100; i += 64)
-	{
-		int localIndex = localBaseIndex + i;
-		int bufferIndex = localToBuffer(localIndex, (int2) group);
-	 	
-	 	if(localIndex < 100)
-	 	{
-	 		local1[localIndex] = readArr1[bufferIndex];
-	 	}
-	}
+	LOAD_WITH_EDGES(id, group, readArr1, local1);
 
 	GroupMemoryBarrierWithGroupSync();
 
@@ -284,31 +254,7 @@ void applyPoissonMatrixHorizontal(uint3 id:  SV_GroupThreadID, uint3 group : SV_
 [numthreads(8,8,1)]
 void applyPoissonMatrixVertical(uint3 id: SV_GroupThreadID, uint3 group : SV_GroupID)
 {
-	// int localIndex = 8 * id.y + id.x;
-	// int bufferIndex = localToBuffer(localIndex, (int2) group);
-
-	// for(int i = 0; i < 100; i += 64)
-	// {
-	 	
-	//  	if(localIndex + i < 100)
-	//  	{
-	//  		local1[localIndex + i] = readArr1[bufferIndex + i];
-	//  	}
-	// }
-	
-	int localBaseIndex = 8 * id.y + id.x;
-
-
-	for(int i = 0; i < 100; i += 64)
-	{
-		int localIndex = localBaseIndex + i;
-		int bufferIndex = localToBuffer(localIndex, (int2) group);
-	 	
-	 	if(localIndex < 100)
-	 	{
-	 		local1[localIndex] = readArr1[bufferIndex];
-	 	}
-	}
+	LOAD_WITH_EDGES(id, group, readArr1, local1);
 
 	GroupMemoryBarrierWithGroupSync();
 	
@@ -329,8 +275,8 @@ void advect(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
     // Finds origin of particle (x, y), in continuous space, then finds its density
     // value by taking a sum of adjacent lattice-point densities,
     // weighted by (x, y)'s distance to each lattice.
-	local1[local2DToLocal((int2) id)] = readArr1[local2DToBuffer((int2) id + int2(1, 1), (int2) group)];
-	local2[local2DToLocal((int2) id)] = readArr2[local2DToBuffer((int2) id + int2(1, 1), (int2) group)];
+	LOAD(id, group, readArr2, local2);
+	LOAD(id, group, readArr1, local1);
 
 	int i0, j0; // Closest gridpoint to x,y
 	int i1, j1; // i,j + 1
