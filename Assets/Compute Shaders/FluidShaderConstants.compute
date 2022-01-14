@@ -1,0 +1,7 @@
+#ifndef FLUID_SHADER_CONSTANTS_GUARD
+#define FLUID_SHADER_CONSTANTS_GUARD
+
+int resolution;
+int groupCount;
+
+#endif
