@@ -129,11 +129,11 @@ void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 	 
 	for(int i = 0; i < 30; i++)
 	{
-		float center = local2[local2DToLocal((int2) id)];
-		float left = local1[local2DToLocal((int2) id - int2(1, 0))];
-		float right = local1[local2DToLocal((int2) id + int2(1, 0))];
-		float up = local1[local2DToLocal((int2) id - int2(0, 1))];
-		float down = local1[local2DToLocal((int2) id + int2(0, 1))];
+		float center = local2[centerIndex];
+		float left = local1[leftIndex];
+		float right = local1[rightIndex];
+		float up = local1[upIndex];
+		float down = local1[downIndex];
 
 		float value = (center + a * (left + right + up + down)) / iter;
 
@@ -197,6 +197,8 @@ void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 	LOAD(id, group, readArr2, local1);
 
 	GroupMemoryBarrierWithGroupSync();
+
+	float center = local1[local2D]
 
 	float div = local1[local2DToLocal((int2) id)];
 	float left = local2[local2DToLocal((int2) id - int2(1, 0))];
