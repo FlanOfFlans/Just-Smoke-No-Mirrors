@@ -12,6 +12,10 @@ public class Fluid : MonoBehaviour
     public bool parallelDiffuse;
     public bool parallelDivergence;
     public bool parallelApplyPoisson;
+    public bool parallelBoundsContinuity;
+    public bool parallelBoundsReflectionV;
+    public bool parallelBoundsReflectionH;
+
 	[SerializeField]
 	int resolution;
 
@@ -404,72 +408,101 @@ public class Fluid : MonoBehaviour
     {
         if(mode == BoundMode.ReflectH)
         {
-            for(int i = 1; i <= resolution; i++)
-            {
-                field[get2DTo1D(0, i)] = -field[get2DTo1D(1, i)];
-                field[get2DTo1D(resolution+1, i)] = -field[get2DTo1D(resolution, i)];
-                field[get2DTo1D(i, 0)] = field[get2DTo1D(i, 1)];
-                field[get2DTo1D(i, resolution+1)] = field[get2DTo1D(i, resolution)];
-            }
+        	if(parallelBoundsReflectionH)
+        	{
+        		output.SetData(field);
+        		s.Dispatch(boundsReflectionHID, groupCount, groupCount, 1);
+        		output.GetData(field);
+        	}
 
-           	int xStep = 1;
-	        int yStep = resolution + 2;
-	        int ULCorner = get2DTo1D(0, 0);
-	        int URCorner = get2DTo1D(resolution+1, 0);
-	        int DLCorner = get2DTo1D(0, resolution+1);
-	        int DRCorner = get2DTo1D(resolution+1, resolution+1);
+        	else
+        	{
+	            for(int i = 1; i <= resolution; i++)
+	            {
+	                field[get2DTo1D(0, i)] = -field[get2DTo1D(1, i)];
+	                field[get2DTo1D(resolution+1, i)] = -field[get2DTo1D(resolution, i)];
+	                field[get2DTo1D(i, 0)] = field[get2DTo1D(i, 1)];
+	                field[get2DTo1D(i, resolution+1)] = field[get2DTo1D(i, resolution)];
+	            }
 
-	        field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
-	        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
-	        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
-	        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
-	    }
+	           	int xStep = 1;
+		        int yStep = resolution + 2;
+		        int ULCorner = get2DTo1D(0, 0);
+		        int URCorner = get2DTo1D(resolution+1, 0);
+		        int DLCorner = get2DTo1D(0, resolution+1);
+		        int DRCorner = get2DTo1D(resolution+1, resolution+1);
+
+		        field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
+		        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
+		        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
+		        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
+		    }
+        }
 
         if(mode == BoundMode.ReflectV)
         {
-            for(int i = 1; i <= resolution; i++)
-            {
-                field[get2DTo1D(0, i)] = field[get2DTo1D(1, i)];
-                field[get2DTo1D(resolution+1, i)] = field[get2DTo1D(resolution, i)];
-                field[get2DTo1D(i, 0)] = -field[get2DTo1D(i, 1)];
-                field[get2DTo1D(i, resolution+1)] = -field[get2DTo1D(i, resolution)];
-            }
+        	if(parallelBoundsReflectionV)
+        	{
+        		output.SetData(field);
+        		s.Dispatch(boundsReflectionVID, groupCount, groupCount, 1);
+        		output.GetData(field);
+        	}
+        	else
+        	{
+	            for(int i = 1; i <= resolution; i++)
+	            {
+	                field[get2DTo1D(0, i)] = field[get2DTo1D(1, i)];
+	                field[get2DTo1D(resolution+1, i)] = field[get2DTo1D(resolution, i)];
+	                field[get2DTo1D(i, 0)] = -field[get2DTo1D(i, 1)];
+	                field[get2DTo1D(i, resolution+1)] = -field[get2DTo1D(i, resolution)];
+	            }
 
-           	int xStep = 1;
-	        int yStep = resolution + 2;
-	        int ULCorner = get2DTo1D(0, 0);
-	        int URCorner = get2DTo1D(resolution+1, 0);
-	        int DLCorner = get2DTo1D(0, resolution+1);
-	        int DRCorner = get2DTo1D(resolution+1, resolution+1);
+	           	int xStep = 1;
+		        int yStep = resolution + 2;
+		        int ULCorner = get2DTo1D(0, 0);
+		        int URCorner = get2DTo1D(resolution+1, 0);
+		        int DLCorner = get2DTo1D(0, resolution+1);
+		        int DRCorner = get2DTo1D(resolution+1, resolution+1);
 
-	        field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
-	        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
-	        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
-	        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
+		        field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
+		        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
+		        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
+		        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
+		    }
         }
 
         if(mode == BoundMode.Continuity)
         {
-            for(int i = 0; i <= resolution; i++)
-            {
-                field[get2DTo1D(0, i)] = field[get2DTo1D(1, i)];
-                field[get2DTo1D(resolution+1, i)] = field[get2DTo1D(resolution, i)];
-                field[get2DTo1D(i, 0)] = field[get2DTo1D(i, 1)];
-                field[get2DTo1D(i, resolution+1)] = field[get2DTo1D(i, resolution)];
-            }
+        	if(parallelBoundsContinuity)
+        	{
+        		output.SetData(field);
+        		s.Dispatch(boundsContinuityID, groupCount, groupCount, 1);
+        		output.GetData(field);
+        	}
 
-	        int xStep = 1;
-	        int yStep = resolution + 2;
-	        int ULCorner = get2DTo1D(0, 0);
-	        int URCorner = get2DTo1D(resolution+1, 0);
-	        int DLCorner = get2DTo1D(0, resolution+1);
-	        int DRCorner = get2DTo1D(resolution+1, resolution+1);
+        	else
+        	{
+	            for(int i = 0; i <= resolution; i++)
+	            {
+	                field[get2DTo1D(0, i)] = field[get2DTo1D(1, i)];
+	                field[get2DTo1D(resolution+1, i)] = field[get2DTo1D(resolution, i)];
+	                field[get2DTo1D(i, 0)] = field[get2DTo1D(i, 1)];
+	                field[get2DTo1D(i, resolution+1)] = field[get2DTo1D(i, resolution)];
+	            }
 
-            field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
-	        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
-	        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
-	        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
-	    }
+    	        int xStep = 1;
+		        int yStep = resolution + 2;
+		        int ULCorner = get2DTo1D(0, 0);
+		        int URCorner = get2DTo1D(resolution+1, 0);
+		        int DLCorner = get2DTo1D(0, resolution+1);
+		        int DRCorner = get2DTo1D(resolution+1, resolution+1);
+
+	            field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
+		        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
+		        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
+		        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
+		    }
+        }
     }
 
     int get2DTo1D(int x, int y)
@@ -505,7 +538,10 @@ public class Fluid : MonoBehaviour
         advectID            = s.FindKernel("advect");
         visualizeGrayID     = s.FindKernel("visualizeGrayscale");
         visualizeRgbID      = s.FindKernel("visualizeRGB");
-
+        boundsContinuityID  = s.FindKernel("boundsContinuity");
+        boundsReflectionHID = s.FindKernel("boundsReflectionH");
+        boundsReflectionVID = s.FindKernel("boundsReflectionV");
+       
         // Print ID names
         kernels = new Dictionary<string, int>()
         {
@@ -517,7 +553,10 @@ public class Fluid : MonoBehaviour
             { "applyPoissonV",   applyPoissonVID },
             { "advect",          advectID },
             { "visualizeGrayID", visualizeGrayID },
-            { "visualizeRgbID", visualizeRgbID }
+            { "visualizeRgbID", visualizeRgbID },
+            { "boundsContinuityID", boundsContinuityID },
+            { "boundsReflectionHID", boundsReflectionHID },
+            { "boundsReflectionVID", boundsReflectionVID },
         };
 
         if(Debug.isDebugBuild)
