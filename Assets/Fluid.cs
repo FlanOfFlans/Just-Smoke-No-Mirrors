@@ -153,26 +153,29 @@ public class Fluid : MonoBehaviour
 
 		if(parallelDiffuse && useParallel)
 		{
-			int boundsID = -1;
+			switch(boundaryMode)
+            {
+                case BoundMode.ReflectH:
+                    s.SetInt("linsolveBoundsMode", 0);
+                    break;
 
-			if(boundaryMode == BoundMode.Continuity)
-			{ boundsID = boundsContinuityID; }
-			else if(boundaryMode == BoundMode.ReflectH)
-			{ boundsID = boundsReflectionHID; }
-			else if(boundaryMode == BoundMode.ReflectV)
-			{ boundsID = boundsReflectionVID; }
+                case BoundMode.ReflectV:
+                    s.SetInt("linsolveBoundsMode", 1);
+                    break;
 
-			float h = 1.0f/(float) resolution;
+                case BoundMode.Continuity:
+                    s.SetInt("linsolveBoundsMode", 2);
+                    break;
 
-			s.SetFloat("diffusionRate", (Time.deltaTime * resistance * (h*h)));
-			s.SetFloat("iter", 1 + ((Time.deltaTime * resistance) * (h*h)));
+                default:
+                    throw new System.ArgumentException("Invalid bounds mode");
+
+            }
+
+			s.SetFloat("diffusionRate", resistance);
 	        output.SetData(diffuseArray);
 	        input2.SetData(prevField);
-	        for(int i = 0; i < 30; i++)
-	        {
-	            s.Dispatch(diffuseID, groupCount, groupCount, 1);
-	            s.Dispatch(boundsID, groupCount, groupCount, 1);
-	        }
+            s.Dispatch(diffuseID, groupCount, groupCount, 1);
 	        output.GetData(diffuseArray);
 
 		} 
