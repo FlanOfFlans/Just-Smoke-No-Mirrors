@@ -25,9 +25,9 @@
 
 #define LOAD_WITH_EDGES(id, group, loadFrom, loadTo) {\
 	int localBaseIndex = 8 * id.y + id.x;\
-	for(int i = 0; i < 100; i += 64)\
+	for(int loadLoopValue = 0; loadLoopValue < 100; loadLoopValue += 64)\
 	{\
-		int localIndex = localBaseIndex + i;\
+		int localIndex = localBaseIndex + loadLoopValue;\
 		int bufferIndex = localToBuffer(localIndex, (int2) group);\
 		if(localIndex < 100) {loadTo[localIndex] = loadFrom[bufferIndex]; }\
 	}\
@@ -39,7 +39,6 @@ int resolution;
 float dt;
 float diffusionRate;
 float visualizationMax;
-int groupCount;
 groupshared float local1[100];
 groupshared float local2[100];
 RWTexture2D<float4> tex;
@@ -112,13 +111,8 @@ void addSources(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 [numthreads(8,8,1)]
 void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
-	LOAD_WITH_EDGES(id, group, workingArr, local1);
-	LOAD_WITH_EDGES(id, group, readArr2, local2);
-
-	GroupMemoryBarrierWithGroupSync();
-
-	int a = (diffusionRate * dt) / (resolution * resolution);
-	int iter = 1 + a;
+	float a = (diffusionRate * dt) / ((resolution + 2) * (resolution + 2));
+	float iter = 1 + a;
 
 	int centerIndex = local2DToLocal((int2) id);
 	int leftIndex = local2DToLocal((int2) id - int2(1, 0));
@@ -126,9 +120,14 @@ void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 	int upIndex = local2DToLocal((int2) id - int2(0, 1));
 	int downIndex = local2DToLocal((int2) id + int2(0, 1));
 	int bufferIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
-	 
+	
 	for(int i = 0; i < 30; i++)
 	{
+		LOAD_WITH_EDGES(id, group, workingArr, local1);
+		LOAD_WITH_EDGES(id, group, readArr2, local2);
+
+		GroupMemoryBarrierWithGroupSync();
+		
 		float center = local2[centerIndex];
 		float left = local1[leftIndex];
 		float right = local1[rightIndex];
@@ -138,6 +137,38 @@ void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 		float value = (center + a * (left + right + up + down)) / iter;
 
 		workingArr[local2DToBuffer((int2) id + int2(1,1), (int2) group)] = value;
+
+		switch(linsolveBoundsMode)
+		{
+			case 0:
+				boundsReflectionH(id, group);
+				break;
+
+			case 1:
+				boundsReflectionV(id, group);
+				break;
+
+			case 2:
+				boundsContinuity(id, group);
+				break;
+		}
+
+		GroupMemoryBarrierWithGroupSync();
+
+		LOAD_WITH_EDGES(id, group, workingArr, local2);
+		LOAD_WITH_EDGES(id, group, readArr2, local1);
+
+		GroupMemoryBarrierWithGroupSync();
+		
+		center = local2[centerIndex];
+		left = local1[leftIndex];
+		right = local1[rightIndex];
+		up = local1[upIndex];
+		down = local1[downIndex];
+
+		value = (center + a * (left + right + up + down)) / iter;
+
+		readArr2[local2DToBuffer((int2) id + int2(1,1), (int2) group)] = value;
 
 		switch(linsolveBoundsMode)
 		{
@@ -197,8 +228,6 @@ void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 	LOAD(id, group, readArr2, local1);
 
 	GroupMemoryBarrierWithGroupSync();
-
-	float center = local1[local2D]
 
 	float div = local1[local2DToLocal((int2) id)];
 	float left = local2[local2DToLocal((int2) id - int2(1, 0))];

@@ -2,7 +2,6 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-
 public class Fluid : MonoBehaviour
 {
     public ComputeShader s;
@@ -98,13 +97,13 @@ public class Fluid : MonoBehaviour
 
     void VelocityStep()
     {
-        s.SetFloat("resistance", viscosity);
+        s.SetFloat("diffusionRate", viscosity);
 
         Add(xVelocity, xForces);
         Add(yVelocity, yForces);
 
-        Diffuse(xVelocity, BoundMode.ReflectH, viscosity, false);
-        Diffuse(yVelocity, BoundMode.ReflectV, viscosity, false);
+        Diffuse(xVelocity, BoundMode.ReflectH, viscosity, true);
+        Diffuse(yVelocity, BoundMode.ReflectV, viscosity, true);
 
         ProjectVelocity();
 
@@ -116,7 +115,7 @@ public class Fluid : MonoBehaviour
 
     void DensityStep()
     {
-        s.SetFloat("resistance", diffusability);
+        s.SetFloat("diffusionRate", diffusability);
         
         Add(density, sources);
         Diffuse(density, BoundMode.Continuity, diffusability, true);
