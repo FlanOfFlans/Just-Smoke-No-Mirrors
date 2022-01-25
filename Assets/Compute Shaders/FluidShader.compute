@@ -193,22 +193,38 @@ void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 [numthreads(8,8,1)]
 void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
-	//local1 for divergence, local2 for poisson matrix
-	LOAD_WITH_EDGES(id, group, readArr1, local2);
-	LOAD(id, group, readArr2, local1);
+	float a = 1;
+	float iter = 4;
 
-	GroupMemoryBarrierWithGroupSync();
+	int centerIndex = local2DToLocal((int2) id);
+	int leftIndex = local2DToLocal((int2) id - int2(1, 0));
+	int rightIndex = local2DToLocal((int2) id + int2(1, 0));
+	int upIndex = local2DToLocal((int2) id - int2(0, 1));
+	int downIndex = local2DToLocal((int2) id + int2(0, 1));
+	int bufferIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	
+	for(int i = 0; i < 60; i++)
+	{
+		LOAD_WITH_EDGES(id, group, workingArr, local1);
+		LOAD_WITH_EDGES(id, group, readArr2, local2);
 
-	float div = local1[local2DToLocal((int2) id)];
-	float left = local2[local2DToLocal((int2) id - int2(1, 0))];
-	float right = local2[local2DToLocal((int2) id + int2(1, 0))];
-	float up = local2[local2DToLocal((int2) id - int2(0, 1))];
-	float down = local2[local2DToLocal((int2) id + int2(0, 1))];
+		GroupMemoryBarrierWithGroupSync();
+		
+		float center = local2[centerIndex];
+		float left = local1[leftIndex];
+		float right = local1[rightIndex];
+		float up = local1[upIndex];
+		float down = local1[downIndex];
 
-	float p = (div + left + right + up + down) / 4;
-	workingArr[local2DToBuffer((int2) id, (int2) group)] = p;
+		float value = (center + a * (left + right + up + down)) / iter;
+
+		workingArr[local2DToBuffer((int2) id + int2(1,1), (int2) group)] = value;
+
+		boundsContinuity(id, group);
+
+		GroupMemoryBarrierWithGroupSync();
+	}
 }
-
 // Applies the Poisson matrix to the x velocity at this point.
 // Uses x velocity as the workingArr, and poisson as readArr1
 [numthreads(8,8,1)]

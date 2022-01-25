@@ -10,10 +10,8 @@ public class Fluid : MonoBehaviour
     public bool parallelAdd;
     public bool parallelDiffuse;
     public bool parallelDivergence;
+    public bool parallelPoisson;
     public bool parallelApplyPoisson;
-    public bool parallelBoundsContinuity;
-    public bool parallelBoundsReflectionV;
-    public bool parallelBoundsReflectionH;
 
 	[SerializeField]
 	int resolution;
@@ -251,42 +249,36 @@ public class Fluid : MonoBehaviour
         System.Array.Clear(poisson, 0, poisson.Length);
 
         // Calculate Poisson matrix via Gauss-Seidel
-        // Iterative version
-        for(int k = 0; k < 20; k++)
+        
+        if(parallelPoisson)
         {
-            for(int i = 1; i <= resolution; i++)
-            {
-                for(int j = 1; j <= resolution; j++)
-                {
-                    float div = divergence[get2DTo1D(i, j)];
-                    float left = poisson[get2DTo1D(i - 1, j)];
-                    float right = poisson[get2DTo1D(i + 1, j)];
-                    float up = poisson[get2DTo1D(i, j - 1)];
-                    float down = poisson[get2DTo1D(i, j + 1)];
-
-                    poisson[get2DTo1D(i, j)] = (div + left + right + up + down) / 4.0f;
-                }
-            }
-            Bounds(poisson, BoundMode.Continuity);
-        }
-
-        // Parallel version
-        /*
-        System.Array.Clear(poisson, 0, poisson.Length);
-        System.Array.Clear(working, 0, working.Length);
-        output.SetData(working);
-        input1.SetData(poisson);
-        input2.SetData(divergence);
-        for(int i = 0; i < 30; i++)
-        {
-            input1.SetData(poisson);
+            output.SetData(poisson);
+            input2.SetData(divergence);
             s.Dispatch(poissonID, groupCount, groupCount, 1);
             output.GetData(poisson);
-            System.Array.Clear(working, 0, working.Length);
-
-            Bounds(poisson, BoundMode.Continuity);
         }
-        */
+
+        else
+        {
+        // Iterative version
+            for(int k = 0; k < 20; k++)
+            {
+                for(int i = 1; i <= resolution; i++)
+                {
+                    for(int j = 1; j <= resolution; j++)
+                    {
+                        float div = divergence[get2DTo1D(i, j)];
+                        float left = poisson[get2DTo1D(i - 1, j)];
+                        float right = poisson[get2DTo1D(i + 1, j)];
+                        float up = poisson[get2DTo1D(i, j - 1)];
+                        float down = poisson[get2DTo1D(i, j + 1)];
+
+                        poisson[get2DTo1D(i, j)] = (div + left + right + up + down) / 4.0f;
+                    }
+                }
+                Bounds(poisson, BoundMode.Continuity);
+            }
+        }
     }
 
     void ApplyPoisson()
@@ -410,100 +402,71 @@ public class Fluid : MonoBehaviour
     {
         if(mode == BoundMode.ReflectH)
         {
-        	if(parallelBoundsReflectionH)
-        	{
-        		output.SetData(field);
-        		s.Dispatch(boundsReflectionHID, groupCount, groupCount, 1);
-        		output.GetData(field);
-        	}
+            for(int i = 1; i <= resolution; i++)
+            {
+                field[get2DTo1D(0, i)] = -field[get2DTo1D(1, i)];
+                field[get2DTo1D(resolution+1, i)] = -field[get2DTo1D(resolution, i)];
+                field[get2DTo1D(i, 0)] = field[get2DTo1D(i, 1)];
+                field[get2DTo1D(i, resolution+1)] = field[get2DTo1D(i, resolution)];
+            }
 
-        	else
-        	{
-	            for(int i = 1; i <= resolution; i++)
-	            {
-	                field[get2DTo1D(0, i)] = -field[get2DTo1D(1, i)];
-	                field[get2DTo1D(resolution+1, i)] = -field[get2DTo1D(resolution, i)];
-	                field[get2DTo1D(i, 0)] = field[get2DTo1D(i, 1)];
-	                field[get2DTo1D(i, resolution+1)] = field[get2DTo1D(i, resolution)];
-	            }
+           	int xStep = 1;
+	        int yStep = resolution + 2;
+	        int ULCorner = get2DTo1D(0, 0);
+	        int URCorner = get2DTo1D(resolution+1, 0);
+	        int DLCorner = get2DTo1D(0, resolution+1);
+	        int DRCorner = get2DTo1D(resolution+1, resolution+1);
 
-	           	int xStep = 1;
-		        int yStep = resolution + 2;
-		        int ULCorner = get2DTo1D(0, 0);
-		        int URCorner = get2DTo1D(resolution+1, 0);
-		        int DLCorner = get2DTo1D(0, resolution+1);
-		        int DRCorner = get2DTo1D(resolution+1, resolution+1);
-
-		        field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
-		        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
-		        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
-		        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
-		    }
+	        field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
+	        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
+	        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
+	        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
         }
 
         if(mode == BoundMode.ReflectV)
         {
-        	if(parallelBoundsReflectionV)
-        	{
-        		output.SetData(field);
-        		s.Dispatch(boundsReflectionVID, groupCount, groupCount, 1);
-        		output.GetData(field);
-        	}
-        	else
-        	{
-	            for(int i = 1; i <= resolution; i++)
-	            {
-	                field[get2DTo1D(0, i)] = field[get2DTo1D(1, i)];
-	                field[get2DTo1D(resolution+1, i)] = field[get2DTo1D(resolution, i)];
-	                field[get2DTo1D(i, 0)] = -field[get2DTo1D(i, 1)];
-	                field[get2DTo1D(i, resolution+1)] = -field[get2DTo1D(i, resolution)];
-	            }
+            for(int i = 1; i <= resolution; i++)
+            {
+                field[get2DTo1D(0, i)] = field[get2DTo1D(1, i)];
+                field[get2DTo1D(resolution+1, i)] = field[get2DTo1D(resolution, i)];
+                field[get2DTo1D(i, 0)] = -field[get2DTo1D(i, 1)];
+                field[get2DTo1D(i, resolution+1)] = -field[get2DTo1D(i, resolution)];
+            }
 
-	           	int xStep = 1;
-		        int yStep = resolution + 2;
-		        int ULCorner = get2DTo1D(0, 0);
-		        int URCorner = get2DTo1D(resolution+1, 0);
-		        int DLCorner = get2DTo1D(0, resolution+1);
-		        int DRCorner = get2DTo1D(resolution+1, resolution+1);
+           	int xStep = 1;
+	        int yStep = resolution + 2;
+	        int ULCorner = get2DTo1D(0, 0);
+	        int URCorner = get2DTo1D(resolution+1, 0);
+	        int DLCorner = get2DTo1D(0, resolution+1);
+	        int DRCorner = get2DTo1D(resolution+1, resolution+1);
 
-		        field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
-		        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
-		        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
-		        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
-		    }
+	        field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
+	        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
+	        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
+	        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
         }
 
         if(mode == BoundMode.Continuity)
         {
-        	if(parallelBoundsContinuity)
-        	{
-        		output.SetData(field);
-        		s.Dispatch(boundsContinuityID, groupCount, groupCount, 1);
-        		output.GetData(field);
-        	}
+            for(int i = 0; i <= resolution; i++)
+            {
+                field[get2DTo1D(0, i)] = field[get2DTo1D(1, i)];
+                field[get2DTo1D(resolution+1, i)] = field[get2DTo1D(resolution, i)];
+                field[get2DTo1D(i, 0)] = field[get2DTo1D(i, 1)];
+                field[get2DTo1D(i, resolution+1)] = field[get2DTo1D(i, resolution)];
+            }
 
-        	else
-        	{
-	            for(int i = 0; i <= resolution; i++)
-	            {
-	                field[get2DTo1D(0, i)] = field[get2DTo1D(1, i)];
-	                field[get2DTo1D(resolution+1, i)] = field[get2DTo1D(resolution, i)];
-	                field[get2DTo1D(i, 0)] = field[get2DTo1D(i, 1)];
-	                field[get2DTo1D(i, resolution+1)] = field[get2DTo1D(i, resolution)];
-	            }
+	        int xStep = 1;
+	        int yStep = resolution + 2;
+	        int ULCorner = get2DTo1D(0, 0);
+	        int URCorner = get2DTo1D(resolution+1, 0);
+	        int DLCorner = get2DTo1D(0, resolution+1);
+	        int DRCorner = get2DTo1D(resolution+1, resolution+1);
 
-    	        int xStep = 1;
-		        int yStep = resolution + 2;
-		        int ULCorner = get2DTo1D(0, 0);
-		        int URCorner = get2DTo1D(resolution+1, 0);
-		        int DLCorner = get2DTo1D(0, resolution+1);
-		        int DRCorner = get2DTo1D(resolution+1, resolution+1);
-
-	            field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
-		        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
-		        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
-		        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
-		    }
+            field[ULCorner] = 0.5f * field[ULCorner + xStep] + field[ULCorner + yStep];
+	        field[URCorner] = 0.5f * field[URCorner - xStep] + field[URCorner + yStep];
+	        field[DLCorner] = 0.5f * field[DLCorner + xStep] + field[DLCorner - yStep];
+	        field[DRCorner] = 0.5f * field[DRCorner - xStep] + field[DRCorner - yStep];
         }
     }
 
