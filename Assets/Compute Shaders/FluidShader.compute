@@ -25,20 +25,20 @@
 
 #define LOAD_WITH_EDGES(id, group, loadFrom, loadTo) {\
 	int localBaseIndex = 8 * id.y + id.x;\
-	for(int i = 0; i < 100; i += 64)\
+	for(int loadLoopValue = 0; loadLoopValue < 100; loadLoopValue += 64)\
 	{\
-		int localIndex = localBaseIndex + i;\
+		int localIndex = localBaseIndex + loadLoopValue;\
 		int bufferIndex = localToBuffer(localIndex, (int2) group);\
 		if(localIndex < 100) {loadTo[localIndex] = loadFrom[bufferIndex]; }\
 	}\
 	}
 
+int groupCount;
+int linsolveBoundsMode; // 0 = reflectH, 1 = reflectV, 2 = continuity
 int resolution;
 float dt;
 float diffusionRate;
-float iter;
 float visualizationMax;
-int groupCount;
 groupshared float local1[100];
 groupshared float local2[100];
 RWTexture2D<float4> tex;
@@ -111,25 +111,50 @@ void addSources(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 [numthreads(8,8,1)]
 void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
-	LOAD_WITH_EDGES(id, group, workingArr, local1);
-	LOAD_WITH_EDGES(id, group, readArr2, local2);
+	float a = (diffusionRate * dt) * ((resolution) * (resolution));
+	float iter = 1 + 4*a;
 
-	GroupMemoryBarrierWithGroupSync();
+	int centerIndex = local2DToLocal((int2) id);
+	int leftIndex = local2DToLocal((int2) id - int2(1, 0));
+	int rightIndex = local2DToLocal((int2) id + int2(1, 0));
+	int upIndex = local2DToLocal((int2) id - int2(0, 1));
+	int downIndex = local2DToLocal((int2) id + int2(0, 1));
+	int bufferIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	
+	for(int i = 0; i < 60; i++)
+	{
+		LOAD_WITH_EDGES(id, group, workingArr, local1);
+		LOAD_WITH_EDGES(id, group, readArr2, local2);
 
-	float center = local2[local2DToLocal((int2) id)];
-	float left = local1[local2DToLocal((int2) id - int2(1, 0))];
-	float right = local1[local2DToLocal((int2) id + int2(1, 0))];
-	float up = local1[local2DToLocal((int2) id - int2(0, 1))];
-	float down = local1[local2DToLocal((int2) id + int2(0, 1))];
+		GroupMemoryBarrierWithGroupSync();
+		
+		float center = local2[centerIndex];
+		float left = local1[leftIndex];
+		float right = local1[rightIndex];
+		float up = local1[upIndex];
+		float down = local1[downIndex];
 
-	float value = (center + diffusionRate * (left + right + up + down)) / iter;
+		float value = (center + a * (left + right + up + down)) / iter;
 
-	GroupMemoryBarrierWithGroupSync();
+		workingArr[local2DToBuffer((int2) id + int2(1,1), (int2) group)] = value;
 
-	workingArr[local2DToBuffer((int2) id + int2(1,1), (int2) group)] = value;
+		switch(linsolveBoundsMode)
+		{
+			case 0:
+				boundsReflectionH(id, group);
+				break;
 
-	GroupMemoryBarrierWithGroupSync();
+			case 1:
+				boundsReflectionV(id, group);
+				break;
 
+			case 2:
+				boundsContinuity(id, group);
+				break;
+		}
+
+		GroupMemoryBarrierWithGroupSync();
+	}
 }
 
 // Calculates divergence using readArr1 as the x velocity, 
@@ -141,8 +166,11 @@ void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 	LOAD_WITH_EDGES(id, group, readArr2, local2)
 
 	GroupMemoryBarrierWithGroupSync();
-
+	
+	float a = (diffusionRate * dt) / (resolution * resolution);
+	float iter = 1 + a;
 	float gridStep = 1.0/(float) resolution;
+
 	int2 offsetID = (int2) id + int2(1, 1);
 
 	int2 rightIndex = (int2) id + int2(1, 0);
@@ -165,22 +193,38 @@ void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 [numthreads(8,8,1)]
 void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
-	//local1 for divergence, local2 for poisson matrix
-	LOAD_WITH_EDGES(id, group, readArr1, local2);
-	LOAD(id, group, readArr2, local1);
+	float a = 1;
+	float iter = 4;
 
-	GroupMemoryBarrierWithGroupSync();
+	int centerIndex = local2DToLocal((int2) id);
+	int leftIndex = local2DToLocal((int2) id - int2(1, 0));
+	int rightIndex = local2DToLocal((int2) id + int2(1, 0));
+	int upIndex = local2DToLocal((int2) id - int2(0, 1));
+	int downIndex = local2DToLocal((int2) id + int2(0, 1));
+	int bufferIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
+	
+	for(int i = 0; i < 60; i++)
+	{
+		LOAD_WITH_EDGES(id, group, workingArr, local1);
+		LOAD_WITH_EDGES(id, group, readArr2, local2);
 
-	float div = local1[local2DToLocal((int2) id)];
-	float left = local2[local2DToLocal((int2) id - int2(1, 0))];
-	float right = local2[local2DToLocal((int2) id + int2(1, 0))];
-	float up = local2[local2DToLocal((int2) id - int2(0, 1))];
-	float down = local2[local2DToLocal((int2) id + int2(0, 1))];
+		GroupMemoryBarrierWithGroupSync();
+		
+		float center = local2[centerIndex];
+		float left = local1[leftIndex];
+		float right = local1[rightIndex];
+		float up = local1[upIndex];
+		float down = local1[downIndex];
 
-	float p = (div + left + right + up + down) / 4;
-	workingArr[local2DToBuffer((int2) id, (int2) group)] = p;
+		float value = (center + a * (left + right + up + down)) / iter;
+
+		workingArr[local2DToBuffer((int2) id + int2(1,1), (int2) group)] = value;
+
+		boundsContinuity(id, group);
+
+		GroupMemoryBarrierWithGroupSync();
+	}
 }
-
 // Applies the Poisson matrix to the x velocity at this point.
 // Uses x velocity as the workingArr, and poisson as readArr1
 [numthreads(8,8,1)]
@@ -278,7 +322,7 @@ void visualizeGrayscale(uint3 id: SV_GroupThreadID, uint3 group : SV_GroupID)
 
 	GroupMemoryBarrierWithGroupSync();
 
-	float value = local1[local2DToLocal((int2) id)];
+	float value = abs(local1[local2DToLocal((int2) id)]);
 	value = 1 - min(value / visualizationMax, 1);
 	tex[int2(id.x + 8* group.x, id.y + 8*group.y)] = float4(value, value, value, 1.0);
 }
@@ -449,6 +493,9 @@ void boundsReflectionH(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 	int writeIndex2;
 	int writeIndex3;
 
+	// Returns 0 if thread is not an edge
+	// Returns 1/2/3/4 if on left/right/top/bottom respectively
+	// Returns 5/6/7/8 if UL/BL/UR/BR corner respectively
 	switch(checkEdge((uint2) id, (uint2) group))
 	{
 		case 1:
@@ -522,6 +569,9 @@ void boundsReflectionV(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 	int writeIndex2;
 	int writeIndex3;
 
+	// Returns 0 if thread is not an edge
+	// Returns 1/2/3/4 if on left/right/top/bottom respectively
+	// Returns 5/6/7/8 if UL/BL/UR/BR corner respectively
 	switch(checkEdge((uint2) id, (uint2) group))
 	{
 		case 1:
@@ -576,8 +626,8 @@ void boundsReflectionV(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 			writeIndex2 = local2DToBuffer((int2) id + int2(2, 1), (int2) group);
 			writeIndex3 = local2DToBuffer((int2) id + int2(1, 2), (int2) group);
 			workingArr[writeIndex1] = 0;
-			workingArr[writeIndex2] = -workingArr[readIndex];
-			workingArr[writeIndex3] = workingArr[readIndex];
+			workingArr[writeIndex2] = workingArr[readIndex];
+			workingArr[writeIndex3] = -workingArr[readIndex];
 			break;
 		}
 }
