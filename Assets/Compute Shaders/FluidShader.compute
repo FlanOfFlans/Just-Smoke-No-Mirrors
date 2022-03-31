@@ -17,12 +17,18 @@
 #pragma kernel boundsReflectionV
 #pragma kernel boundsReflectionH
 
+// Given a thread's ID and Group No., the LOAD macro moves
+// the indicated portion of an 8x8 block of data (corresponding 
+// to the thread's group) from loadFrom, into loadTo.
 #define LOAD(id, group, loadFrom, loadTo) {\
 	int localIndex = local2DToLocal((int2) id);\
 	int bufferIndex = local2DToBuffer((int2) id + int2(1, 1), (int2) group);\
 	loadTo[localIndex] = loadFrom[bufferIndex];\
 	}
 
+// As LOAD, but a 10x10 block (corresponding to the thread's group, 
+// PLUS adjacent cells) is loaded. Some threads may load more than one
+// value.
 #define LOAD_WITH_EDGES(id, group, loadFrom, loadTo) {\
 	int localBaseIndex = 8 * id.y + id.x;\
 	for(int loadLoopValue = 0; loadLoopValue < 100; loadLoopValue += 64)\
@@ -52,44 +58,61 @@ RWStructuredBuffer<float> readArr1;
 RWStructuredBuffer<float> readArr2;
 RWStructuredBuffer<float> readArr3;
 
+// Functions which simulate physical forces on the fluid
 [numthreads(8,8,1)]
 void addSources(uint3 id : SV_GroupThreadID, uint3 group3 : SV_GroupID);
+
 [numthreads(8,8,1)]
 void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID);
+
 [numthreads(8,8,1)]
 void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID);
+
 [numthreads(8,8,1)]
 void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID);
+
 [numthreads(8,8,1)]
 void applyPoissonMatrixHorizontal(uint3 id:  SV_GroupThreadID, uint3 group : SV_GroupID);
+
 [numthreads(8,8,1)]
 void applyPoissonMatrixVertical(uint3 id: SV_GroupThreadID, uint3 group : SV_GroupID);
+
 [numthreads(8,8,1)]
 void advect(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID);
+
+// Functions which visualize the fluid
 [numthreads(8,8,1)]
 void visualizeGrayscale(uint3 id: SV_GroupThreadID, uint3 group : SV_GroupID);
+
 [numthreads(8,8,1)]
 void visualizeRGB(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID);
-[numthreads(8,8,1)]
-int localToBuffer(int local, int2 group);
-[numthreads(8,8,1)]
-int local2DToLocal(int2 local2D);
-[numthreads(8,8,1)]
-int local2DToBuffer(int2 local2D, int2 group);
+
+// Bounds checking and enforcing functions
 [numthreads(8,8,1)]
 int checkEdge(int2 local2D, int2 group);
+
 [numthreads(8,8,1)]
 void boundsContinuity(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID);
+
 [numthreads(8,8,1)]
 void boundsReflectionH(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID);
+
 [numthreads(8,8,1)]
 void boundsReflectionV(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID);
+
+// Helper functions, for ease of loading. Three kinds of coordinates are used:
+// "local" is a [0, 99] index corresponding to the index of an HLSL array.
+// "local2D" is an int2 [(0,0), (9,9)] value corresponding to the 2D index of an HLSL array. 
+// 0 and 9 reference edges; 1-8 reference coordinates within the data block.
+// "buffer" is a [0, (resolution + 2)^2] index corresponding to the index of a ComputeBuffer.
+int localToBuffer(int local, int2 group);
+int local2DToLocal(int2 local2D);
+int local2DToBuffer(int2 local2D, int2 group);
 
 
 
 // Adds the read array to the working array, scaled by timestep.
 // Does not add at borders--this is left to the CPU for simplicity.
-[numthreads(8,8,1)]
 void addSources(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
 	LOAD(id, group, readArr1, local1);
@@ -100,15 +123,11 @@ void addSources(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 		local1[local2DToLocal((int2) id)] * dt;
 }
 
-// One step in a Gauss-Seidel linear solver for diffusion.
-// CPU will flip and enforce bounds after each step, then repeat.
-// This will be done an arbitrary number of times.
-// Approximations become more accurate with each step.
-// The previous step is stored in the read array, while current
-// calculations are written to working array.
-// They should be flipped between each approx step.
-// readArr2 contains data from last frame.
-[numthreads(8,8,1)]
+
+// Runs a parallelized Gauss-Seidel linear solver for diffusion.
+// Approximations become more accurate the more steps are done.
+// workingArr contains the current approximation step's values;
+// readArr1 contains data from the end of last frame.
 void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
 	float a = (diffusionRate * dt) * ((resolution) * (resolution));
@@ -124,10 +143,13 @@ void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 	for(int i = 0; i < 60; i++)
 	{
 		LOAD_WITH_EDGES(id, group, workingArr, local1);
-		LOAD_WITH_EDGES(id, group, readArr2, local2);
+		LOAD_WITH_EDGES(id, group, readArr1, local2);
 
 		GroupMemoryBarrierWithGroupSync();
 		
+
+		// Diffusion formula, derived from Navier-Stokes equations,
+		// is taken from "Real Time Fluid Dynamics for Games," by Jos Stam.
 		float center = local2[centerIndex];
 		float left = local1[leftIndex];
 		float right = local1[rightIndex];
@@ -138,6 +160,10 @@ void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 
 		workingArr[local2DToBuffer((int2) id + int2(1,1), (int2) group)] = value;
 
+		// Enforce bounds in the appropriate manner.
+		// Density diffusion should use continuity.
+		// X Velocity should use ReflectH.
+		// Y Velocity should use ReflectV.
 		switch(linsolveBoundsMode)
 		{
 			case 0:
@@ -159,7 +185,6 @@ void diffuseStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 
 // Calculates divergence using readArr1 as the x velocity, 
 // and readArr 2 as the y velocity.
-[numthreads(8,8,1)]
 void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
 	LOAD_WITH_EDGES(id, group, readArr1, local1)
@@ -167,11 +192,9 @@ void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 
 	GroupMemoryBarrierWithGroupSync();
 	
-	float a = (diffusionRate * dt) / (resolution * resolution);
-	float iter = 1 + a;
-	float gridStep = 1.0/(float) resolution;
-
 	int2 offsetID = (int2) id + int2(1, 1);
+
+	float gridStep = 1.0/(float) resolution;
 
 	int2 rightIndex = (int2) id + int2(1, 0);
 	int2 leftIndex = (int2) id - int2(1, 0);
@@ -183,14 +206,19 @@ void calculateDivergence(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 	float down = local2[local2DToLocal(downIndex)];
 	float up = local2[local2DToLocal(upIndex)];
 
+	// Simple numerical method to find divergence of a field.
 	int index = local2DToBuffer(offsetID, (int2) group);
 	float value = -0.5 * gridStep * (right - left + down - up);
 	workingArr[index] = value;
 }
 
-// One step in a linear solve for the poisson matrix
-// Uses readArr1 as poisson matrix, and readArr2 as divergence
-[numthreads(8,8,1)]
+// Runs a parallelized Gauss-Seidel linear solver for the Poisson matrix.
+// Approximations become more accurate the more steps are done.
+// workingArr contains the current approximation step's values;
+// readArr1 contains data from the end of last frame.
+
+// The Poisson matrix is used to enforce conservation of mass, and
+// thereby, simulate pressure.
 void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 {
 	float a = 1;
@@ -206,7 +234,7 @@ void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 	for(int i = 0; i < 60; i++)
 	{
 		LOAD_WITH_EDGES(id, group, workingArr, local1);
-		LOAD_WITH_EDGES(id, group, readArr2, local2);
+		LOAD_WITH_EDGES(id, group, readArr1, local2);
 
 		GroupMemoryBarrierWithGroupSync();
 		
@@ -216,6 +244,8 @@ void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 		float up = local1[upIndex];
 		float down = local1[downIndex];
 
+		// Poisson formula, derived from Navier-Stokes equations,
+		// is taken from "Real Time Fluid Dynamics for Games," by Jos Stam.
 		float value = (center + a * (left + right + up + down)) / iter;
 
 		workingArr[local2DToBuffer((int2) id + int2(1,1), (int2) group)] = value;
@@ -227,7 +257,6 @@ void poissonStep(uint3 id : SV_GroupThreadID, uint3 group : SV_GroupID)
 }
 // Applies the Poisson matrix to the x velocity at this point.
 // Uses x velocity as the workingArr, and poisson as readArr1
-[numthreads(8,8,1)]
 void applyPoissonMatrixHorizontal(uint3 id:  SV_GroupThreadID, uint3 group : SV_GroupID)
 {
 	LOAD_WITH_EDGES(id, group, readArr1, local1);
@@ -237,13 +266,14 @@ void applyPoissonMatrixHorizontal(uint3 id:  SV_GroupThreadID, uint3 group : SV_
 	float h = 1.0 / resolution;
 	float left = local1[local2DToLocal((int2) id - int2(1, 0))];
 	float right = local1[local2DToLocal((int2) id + int2(1, 0))];
-	int index = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
-	workingArr[index] -= 0.5 * (right - left) / h;	
+
+	float value = 0.5 * (right - left) / h;
+
+	workingArr[local2DToBuffer((int2) id + int2(1, 1), (int2) group)] -= value;
 }
 
 // Applies the Poisson matrix to the y velocity at this point.
 // Uses y velocity as the workingArr, and poisson as readArr1
-[numthreads(8,8,1)]
 void applyPoissonMatrixVertical(uint3 id: SV_GroupThreadID, uint3 group : SV_GroupID)
 {
 	LOAD_WITH_EDGES(id, group, readArr1, local1);
@@ -253,14 +283,15 @@ void applyPoissonMatrixVertical(uint3 id: SV_GroupThreadID, uint3 group : SV_Gro
 	float h = 1.0 / resolution;
 	float up = local1[local2DToLocal((int2) id - int2(0, 1))];
 	float down = local1[local2DToLocal((int2) id + int2(0, 1))];
-	int index = local2DToBuffer((int2) id + int2(1, 1), (int2) group);
-	workingArr[index] -= 0.5 * (down - up) / h;	
+
+	float value = 0.5 * (down - up) / h;
+
+	workingArr[local2DToBuffer((int2) id + int2(1, 1), (int2) group)] -= value;	
 }
 
 // Calculates advection on a given field.
 // readArr1 is x velocity, readArr2 is y velocity
 // The local readArr3 is the field to advect
-[numthreads(8,8,1)]
 void advect(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 {	
     // Calculates advected field at this point by backtracking velocity.
@@ -315,7 +346,6 @@ void advect(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 }
 
 // Grayscale visualization of readArr1
-[numthreads(8,8,1)]
 void visualizeGrayscale(uint3 id: SV_GroupThreadID, uint3 group : SV_GroupID)
 {
 	local1[local2DToLocal((int2) id)] = readArr1[local2DToBuffer((int2) id + int2(1, 1), (int2) group)];
@@ -328,7 +358,7 @@ void visualizeGrayscale(uint3 id: SV_GroupThreadID, uint3 group : SV_GroupID)
 }
 
 // RGB visualization of readArr1
-[numthreads(8,8,1)]
+// Not currently functional.
 void visualizeRGB(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 {
 	local1[local2DToLocal((int2) id)] = readArr1[local2DToBuffer((int2) id + int2(1, 1), (int2) group)];
@@ -346,7 +376,7 @@ void visualizeRGB(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 
 
 
-// Transforms group-local coords into buffer coords, given group #
+// Transforms group-local coords into buffer coords, given group number
 int localToBuffer(int local, int2 group)
 {
 	int groupOffset = 8 * ((resolution + 2) * group.y + group.x);
@@ -360,7 +390,7 @@ int local2DToLocal(int2 local2D)
 	return 10*(local2D.y + 1) + local2D.x + 1;
 }
 
-// Transforms 2D group-local coords into buffer coords, given group #
+// Transforms 2D group-local coords into buffer coords, given group number
 int local2DToBuffer(int2 local2D, int2 group)
 {
 	int groupOffset = 8 * ((resolution + 2) * group.y + group.x);
@@ -408,7 +438,6 @@ int checkEdge(int2 local2D, int2 group)
 }
 
 // Enforces boundary continuity on workingArr
-[numthreads(8,8,1)]
 void boundsContinuity(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 {
 	// int writeIndex = local2DToBuffer((int2) id, (int2) group);
@@ -481,7 +510,6 @@ void boundsContinuity(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 }
 
 // Enforces boundary reflection in horizontal direction on workingArr
-[numthreads(8,8,1)]
 void boundsReflectionH(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 {
 	// int writeIndex = local2DToBuffer((int2) id, (int2) group);
@@ -557,7 +585,6 @@ void boundsReflectionH(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 }
 
 // Enforces bounda ry reflection in vertical direction on workingArr
-[numthreads(8,8,1)]
 void boundsReflectionV(uint3 id: SV_GroupThreadID, uint3 group: SV_GroupID)
 {
 		// int writeIndex = local2DToBuffer((int2) id, (int2) group);

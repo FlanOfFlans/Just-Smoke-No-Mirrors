@@ -1549,10 +1549,8 @@ MonoBehaviour:
   parallelAdd: 1
   parallelDiffuse: 1
   parallelDivergence: 1
+  parallelPoisson: 1
   parallelApplyPoisson: 1
-  parallelBoundsContinuity: 0
-  parallelBoundsReflectionV: 0
-  parallelBoundsReflectionH: 0
   resolution: 16
   viscosity: 1.81
   diffusability: 0.0028

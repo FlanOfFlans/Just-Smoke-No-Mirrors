@@ -65,30 +65,30 @@ public class Fluid : MonoBehaviour
         InitializeArrays();
         kernels = InitializeKernels();
         InitializeBuffers(kernels);
+
+        // Set a few other values that don't fit into the other steps
+        s.SetInt("resolution", resolution);
+        s.SetInt("groupCount", groupCount);
     }
 
     // Update is called once per frame
     void FixedUpdate()
     {
-        if(true)
-        {
-            frame += 1;
+        frame += 1;
 
-            sources[26] = 10f;
-            xForces[26] = 2000f;
-            yForces[26] = 2000f;
+        sources[26] = 10f;
+        xForces[26] = 2000f;
+        yForces[26] = 2000f;
 
-            sources[297] = 10f;
-            xForces[297] = -2000f;
-            yForces[297] = -2000f;
+        sources[297] = 10f;
+        xForces[297] = -2000f;
+        yForces[297] = -2000f;
 
-            s.SetFloat("dt", Time.deltaTime);
-            s.SetFloat("visualizationMax", visualizationMax);
-            
-            VelocityStep();
-            DensityStep();
-
-        }
+        s.SetFloat("dt", Time.deltaTime);
+        s.SetFloat("visualizationMax", visualizationMax);
+        
+        VelocityStep();
+        DensityStep();
 
         Visualize(density);
     }
@@ -120,6 +120,7 @@ public class Fluid : MonoBehaviour
         Advect(density, BoundMode.Continuity);
     }
 
+    // Adds the field term2 to the field term1, scaling term2 by dt.
     void Add(float[] term1, float[] term2)
     {
     	if(parallelAdd)
@@ -175,7 +176,7 @@ public class Fluid : MonoBehaviour
 
 			s.SetFloat("diffusionRate", resistance);
 	        output.SetData(diffuseArray);
-	        input2.SetData(prevField);
+	        input1.SetData(prevField);
             s.Dispatch(diffuseID, groupCount, groupCount, 1);
 	        output.GetData(diffuseArray);
 
@@ -183,6 +184,8 @@ public class Fluid : MonoBehaviour
 
 		else
 		{
+            // Gauss-Seidel solver for diffusion.
+            // Increase k's max value to increase approximation accuracy.
 	        for(int k = 0; k < 20; k++)
 	        {
 	            for(int i = 1; i <= resolution; i++)
@@ -206,6 +209,7 @@ public class Fluid : MonoBehaviour
 		}
     }
 
+    // Enforces conservation of mass, and thereby, pressure.
     void ProjectVelocity()
     {
         CalculateDivergence();
@@ -215,7 +219,6 @@ public class Fluid : MonoBehaviour
 
     void CalculateDivergence()
     {
-
     	if(parallelDivergence)
     	{
 	        input1.SetData(xVelocity);
@@ -253,7 +256,7 @@ public class Fluid : MonoBehaviour
         if(parallelPoisson)
         {
             output.SetData(poisson);
-            input2.SetData(divergence);
+            input1.SetData(divergence);
             s.Dispatch(poissonID, groupCount, groupCount, 1);
             output.GetData(poisson);
         }
@@ -320,68 +323,6 @@ public class Fluid : MonoBehaviour
 
     void Advect(float[] advectField, BoundMode boundaryMode)
     {
-        // Iterative version
-        /*
-        float[] prev_field = new float[(resolution+2) * (resolution+2)];
-        System.Array.Copy(advectField, prev_field, (resolution+2) * (resolution+2));
-        
-        float dt0 = Time.deltaTime * resolution;
-        float x, y; // Where a particle would come from to land at position (i, j)
-        int i0, j0; // Floor of x, y
-        int i1, j1; // Ceiling of x, y
-        float s0, t0; // How far x, y is from i0, j0
-        float s1, t1; // How far x, y is from i1, j1
-        float s0t0Weight;
-        float s1t0Weight;
-        float s0t1Weight;
-        float s1t1Weight;
-
-        float sum;
-
-        // Calculates advected field at this point by backtracking velocity.
-        // Finds origin of particle (x, y), in continuous space, then finds its density
-        // value by taking a sum of adjacent lattice-point densities,
-        // weighted by (x, y)'s distance to each lattice.
-        for(int i = 1; i <= resolution; i++)
-        {
-            for(int j = 1; j <= resolution; j++)
-            {
-                // Find origin of particle
-                x = i - dt0 * xVelocity[get2DTo1D(i, j)];
-                y = j - dt0 * yVelocity[get2DTo1D(i, j)];
-
-                // Apply bounds
-                if(x < 0.5f)              { x = 0.5f; }
-                if(y < 0.5f)              { y = 0.5f; }
-                if(x > resolution + 0.5f) { x = resolution + 0.5f; }
-                if(y > resolution + 0.5f) { y = resolution + 0.5f; }
-
-                // Find lattice points
-                i0 = (int) Mathf.Floor(x);
-                j0 = (int) Mathf.Floor(y);
-                i1 = i0 + 1;
-                j1 = j0 + 1;
-                
-                // Find distances of particle origin from lattice points.
-                s1 = x - i0;
-                s0 = 1 - s1;
-                t1 = y - j0;
-                t0 = 1 - t1;
-
-                s0t0Weight = s0 * t0 * prev_field[get2DTo1D(i0, j0)];
-                s0t1Weight = s0 * t1 * prev_field[get2DTo1D(i0, j1)];
-                s1t0Weight = s1 * t0 * prev_field[get2DTo1D(i1, j0)];
-                s1t1Weight = s1 * t1 * prev_field[get2DTo1D(i1, j1)];
-
-                sum = s0t0Weight + s0t1Weight + s1t0Weight + s1t1Weight;
-                advectField[get2DTo1D(i, j)] = sum;
-            }
-        }
-
-        Bounds(advectField, boundaryMode);
-        */
-
-        // Parallel version
         input1.SetData(xVelocity);
         input2.SetData(yVelocity);
         input3.SetData(advectField);
@@ -395,7 +336,6 @@ public class Fluid : MonoBehaviour
     {
         input1.SetData(field);
         s.Dispatch(visualizeGrayID, groupCount, groupCount, 1);
-        //s.Dispatch(visualizeRgbID, groupCount, groupCount, 1);
     }
 
     void Bounds(float[] field, BoundMode mode)
@@ -507,7 +447,6 @@ public class Fluid : MonoBehaviour
         boundsReflectionHID = s.FindKernel("boundsReflectionH");
         boundsReflectionVID = s.FindKernel("boundsReflectionV");
        
-        // Print ID names
         kernels = new Dictionary<string, int>()
         {
             { "add",             addID },
@@ -567,10 +506,8 @@ public class Fluid : MonoBehaviour
 
         groupCount = resolution / 8;
 
+        // Ensure our display object uses the texture
         renderTarget.GetComponent<MeshRenderer>().material.SetTexture("_MainTex", tex);
-
-        s.SetInt("resolution", resolution);
-        s.SetInt("groupCount", groupCount);
     }
 
     void OnDestroy()
